@@ -1,7 +1,7 @@
 setwd("~/Desktop/GEOG71922/isashult-alt")
 
 #Install packages & Load Libraries
-install.packages(c("terra","sf","mapview","dismo","spatstat","cowplot","ggplot2","precrec","glmnet","maxnet","mlr", "ranger"))
+install.packages(c("terra","sf","mapview","dismo","spatstat","cowplot","ggplot2","precrec","glmnet","maxnet","mlr"))
 
 library(terra) #for spatial data
 library(sf) #data frames with geometry
@@ -13,7 +13,7 @@ library (precrec) #performance analysis of binary classifications, makes ROC cur
 library (glmnet) #fits lasso and regression modelling 
 library (maxnet) #maxent SDMs for glmnet
 library (mlr) #machine learning
-library (ranger) #random forest
+
 
 
 ##############################################################################
