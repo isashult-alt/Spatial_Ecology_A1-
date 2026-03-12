@@ -1,7 +1,7 @@
 setwd("~/Desktop/GEOG71922/isashult-alt")
 
 #Install packages & Load Libraries
-install.packages(c("terra","sf","mapview","dismo","spatstat","cowplot","ggplot2","precrec","glmnet","maxnet","mlr"))
+install.packages(c("terra","sf","mapview","dismo","spatstat","cowplot","ggplot2","glmnet"))
 
 library(terra) #for spatial data
 library(sf) #data frames with geometry
@@ -9,11 +9,8 @@ library (mapview) #overlays an interactive arcgis map
 library(dismo) #species distribution modelling package 
 library (cowplot) #plot theme for ggplot package
 library (ggplot2) #data visualization package
-library (precrec) #performance analysis of binary classifications, makes ROC curves, versatile model evaluation
 library (glmnet) #fits lasso and regression modelling 
-library (maxnet) #maxent SDMs for glmnet
-library (mlr) #machine learning
-
+library (spatstat) 
 
 
 ##############################################################################
@@ -72,7 +69,6 @@ LCM = crop(LCM,scot,mask=TRUE)
 
 # Inspect
 plot(LCM)
-
 plot(melesFin$geometry,add=T)
 
 
@@ -97,7 +93,6 @@ RCmatrix = apply(RCmatrix,2,FUN=as.numeric)
 # Assign new values to LCM with our reclassification matrix
 broadleaf = classify(LCM, RCmatrix)
 
-
 #Create an vector object called reclassUrban 
 reclassUrban = c(rep(0,19),1,1)
 
@@ -106,11 +101,12 @@ RCmatrixUrban = cbind(levels(LCM)[[1]],reclass)
 
 RCmatrixUrban = RCmatrixUrban[,2:3]
 
-#Apply function to make sure new columns are numeric (here the "2" specifies that we want to apply the as.numeric function to columns, where "1" would have specified rows)
+# Apply function to make sure new columns are numeric 
 RCmatrixUrban = apply(RCmatrixUrban,2,FUN=as.numeric)
 
-#Use the reclassify() function to asssign new values to LCM with our reclassification matrix
+# Use the reclassify() function to assign new values to LCM with our reclassification matrix
 urban = classify(LCM, RCmatrixUrban)
+
 
 ##########################################################################
 ########## Building a Spatial Weight's Matrix for Woodland
@@ -221,7 +217,6 @@ for(i in 1:nPixUrban^2){
   
 }
 
-
 # Add distance values to the weights matrix
 weightsMatrixUrban[] = unlist(distancesUrban)
 
@@ -285,111 +280,95 @@ Pres.cov = Pres.cov[,-1]
 # Get coordinates for spatial cross-validation later
 coordsPres = st_coordinates(Pres.cov)
 
+# Create plain data frame version of Pres.cov for modelling
+Pres.cov.df = as.data.frame(Pres.cov)[, c("broadleaf", "urban", "elev", "Pres")]
+
 # Drop geometry column 
 Back.cov = st_as_sf(data.frame(back,Pres=0))
 
 # Get coordinates of background points for cross validation later
 coordsBack = st_coordinates(back)
 
-#Combine into a table
+# Create plain data frame version of Back.cov for modelling
+Back.cov.df = as.data.frame(Back.cov)[, c("broadleaf", "urban", "elev", "Pres")]
+
+# Combine into a table
 coords = data.frame(rbind(coordsPres,coordsBack))
 
 # Assign coloumn names of DF
 colnames(coords) = c("x","y")
 
+# Stacks pres and absence data into a df
+all.cov = rbind(Pres.cov, Back.cov)
 
-#########################################################################
-########## Creating Learner in the MLR Package for Binomial Model 
-##########################################################################
-
-# Combine pres and background
-all.cov = rbind(Pres.cov,Back.cov)
-
-# Add coordinates
+# Add in coordinates for later spatial cross validation 
 all.cov = cbind(all.cov,coords)
 
-# Remove any NAs
+# Remove any rows with NA
 all.cov = na.omit(all.cov)
 
-# Remove the geometry column
+# Drop the geomery coloum 
 all.cov = st_drop_geometry(all.cov)
 
-# Set task and make target variable categorical
-task = all.cov
-head(all.cov)
-
-task$Pres=as.factor(task$Pres)
-
-task = makeClassifTask(data = task[,c(1:4)], target = "Pres",
-                       positive = "1", coordinates = task[,5:6])
-
-# Use the make learner function to build the model approach for binomial mdel
-# (logistic regression).
-lrnBinomial = makeLearner("classif.binomial",
-                          predict.type = "prob",
-                          fix.factors.prediction = TRUE)
-
 
 #########################################################################
-########## Cross Validation of simple MLR Binaomial model 
+########## GLM Model Construction
 ##########################################################################
 
-# The below code repeats 5-fold cross validation for both strategies, splitting 
-# data into 5 chunks, training on 4, testing on 1, repeated 5 times = 25 models total.
+# Specify model with all variables
+glm.meles <- glm(Pres~broadleaf+urban+elev,binomial(link='logit'), data=all.cov)
 
-# Set up resampling strategy: non-spatial
-perf_levelCV = makeResampleDesc(method = "RepCV", predict = "test", folds = 5, reps = 5)
-
-# Set up resampling strategy: spatial cross-validation
-perf_level_spCV = makeResampleDesc(method = "SpRepCV", folds = 5, reps = 5) 
-
-# Now we run the model re-sampling the data (task) according to the learner set up.
-############## Binomial conventional cross validation 
-cvBinomial = resample(learner = lrnBinomial, task =task,
-                      resampling = perf_levelCV, 
-                      measures = mlr::auc,
-                      show.info = FALSE)
-
-print(cvBinomial)
-
-# Create Spatial Resampling Plots
-plots = createSpatialResamplingPlots(task,resample=cvBinomial,
-                                     crs=crs(allEnv),datum=crs(allEnv),color.test = "red",point.size = 1)
-
-# Use  cowplot function to plot all folds out in a grid
-cowplot::plot_grid(plotlist = plots[["Plots"]], ncol = 3, nrow = 2,
-                   labels = plots[["Labels"]])
-
-
-############# Binomial spatial cross validation
-sp_cvBinomial = resample(learner = lrnBinomial, task =task,
-                         resampling = perf_level_spCV, 
-                         measures = mlr::auc,
-                         show.info = FALSE)
-
-print(sp_cvBinomial)
-
-# Make partition plots
-plotsSP = createSpatialResamplingPlots(task,resample=sp_cvBinomial,
-                                       crs=crs(allEnv),datum=crs(allEnv),color.test = "red",point.size = 1)
-
-# Use the cowplot function to plot all folds out in a grid
-cowplot::plot_grid(plotlist = plotsSP[["Plots"]], ncol = 3, nrow = 2,
-                   labels = plotsSP[["Labels"]])
-
-
-#########################################################################
-########## EXpand on GLM: Variable Relationshsips
-##########################################################################
-
-# Specify the model
-glm.meles = glm(Pres~broadleaf+urban+elev,binomial(link='logit'), data=all.cov)
-
-#Predict 
+# Predict 
 prGLM = predict(allEnv,glm.meles,type="response")
 
 # Plot
-plot(prGLM)
+plot(prGLM, main='GLM, regression')
+
+# Inspect
+summary(glm.meles)
+
+#########################################################################
+########## GLM Model Evaluation
+##########################################################################
+
+# Split sample & K fold assessment of AUC metric across 5 models 
+folds = 5
+
+# Partition presence and absence data according to folds
+kfold_pres <- kfold(Pres.cov, folds)
+kfold_back <- kfold(Back.cov, folds)
+
+# Create an empty list to hold our results 
+eGLM <- list()
+par(mfrow=c(2,3))
+
+# Loop to iterate over folds
+for(i in 1:folds){
+  train <- Pres.cov.df[kfold_pres != i,] #for presence values, select all folds which are not 'i' to train the model
+  test <- Pres.cov.df[kfold_pres == i,] #the remaining fold is used to test the model
+  backTrain <- Back.cov.df[kfold_back != i,] #now for background values, select training folds
+  backTest <- Back.cov.df[kfold_back == i,] #use the remainder for model testing
+  dataTrain <- as.data.frame(rbind(train, backTrain)) #bind presence and background training data together
+  dataTest <- as.data.frame(rbind(test, backTest)) #bind test data together
+  glm_eval <- glm(Pres ~ broadleaf + urban + elev,
+                  binomial(link="logit"),
+                  data = dataTrain)   # Train GLM 
+  eGLM[[i]] <- evaluate(p = dataTest[which(dataTest$Pres==1),],
+                        a = dataTest[which(dataTest$Pres==0),],
+                        glm_eval)   # Evaluate on held-out fold
+  plot(eGLM[[i]], "ROC")
+}
+
+# Model evaluation results 
+aucGLM <- sapply( eGLM, function(x){slot(x, 'auc')} )
+
+# Calculate the mean AUC values 
+mean(aucGLM)
+
+
+#########################################################################
+########## Expand on Variable Relationships in GLM 
+##########################################################################
 
 ############ BROADLEAF response 
 # Build new data frame based on mean of elev and urban but varying values for broadleaf. 
@@ -451,143 +430,84 @@ ggplot(glmNewElev, aes(x = elev, y = fit)) +
               fill = "blue", alpha = 0.3) +
   geom_line(data = glmNewElev, aes(y = fit)) 
 
-############# Specify the glm model using the appropriate polynomial term for broadleaf
-glm.meles = glm(Pres ~ broadleaf + urban + poly(elev, 2), binomial(link = 'logit'), data = all.cov)
+
+#########################################################################
+########## Polynomial GLM Construction 
+##########################################################################
+
+# Glm model using the appropriate polynomial term for broadleaf
+glm.meles.poly = glm(Pres ~ broadleaf + urban + poly(elev, 2), binomial(link = 'logit'), data = all.cov)
+
+# Predict 
+prGLMpoly = predict(allEnv,glm.meles,type="response")
+
+# Plot
+plot(prGLMpoly, main='GLM, polynomial')
 
 # Inspect
-summary(glm.meles)
+summary(glm.meles.poly)
 
 
 #########################################################################
-##########Cross Validation of updated glm.meles model
+########## Polynomial GLM Model Evaluation
 ##########################################################################
 
-# Add squared elevation term to data to encode poly(elev,2) for MLR
-all.cov$elev2 <- all.cov$elev^2
+# Split sample & K fold assessment of AUC metric across 5 models 
+folds = 5
 
-# Rebuild task with elev2 included
-task.poly <- all.cov
-task.poly$Pres <- as.factor(task.poly$Pres)
+# Partition presence and absence data according to folds
+kfold_pres <- kfold(Pres.cov, folds)
+kfold_back <- kfold(Back.cov, folds)
 
-task.poly <- makeClassifTask(data = task.poly[, c("Pres", "broadleaf", "urban", "elev", "elev2")],
-                             target = "Pres",
-                             positive = "1",
-                             coordinates = task.poly[, c("x", "y")])
+# Create an empty list to hold our results 
+eGLMpoly <- list()
+par(mfrow=c(2,3))
 
-# Learner remains the same as before
-lrnBinomial = makeLearner("classif.binomial",
-                          predict.type = "prob",
-                          fix.factors.prediction = TRUE)
+# Loop to iterate over folds
+for(i in 1:folds){
+  train <- Pres.cov.df[kfold_pres != i,] #for presence values, select all folds which are not 'i' to train the model
+  test <- Pres.cov.df[kfold_pres == i,] #the remaining fold is used to test the model
+  backTrain <- Back.cov.df[kfold_back != i,] #now for background values, select training folds
+  backTest <- Back.cov.df[kfold_back == i,] #use the remainder for model testing
+  dataTrain <- as.data.frame(rbind(train, backTrain)) #bind presence and background training data together
+  dataTest <- as.data.frame(rbind(test, backTest)) #bind test data together
+  glm_eval <- glm(Pres ~ broadleaf + urban + poly(elev, 2),
+                  binomial(link="logit"),
+                  data = dataTrain)   # Train GLM 
+  eGLMpoly[[i]] <- evaluate(p = dataTest[which(dataTest$Pres==1),],
+                        a = dataTest[which(dataTest$Pres==0),],
+                        glm_eval)   # Evaluate on held-out fold
+  plot(eGLMpoly[[i]], "ROC")
+}
 
-############## Conventional cross validation of updated model
-cvBinomial.poly = resample(learner = lrnBinomial, task = task.poly,
-                           resampling = perf_levelCV,
-                           measures = mlr::auc,
-                           show.info = FALSE)
+# Model evaluation results 
+aucGLMpoly <- sapply( eGLMpoly, function(x){slot(x, 'auc')} )
 
-print(cvBinomial.poly)
-
-# Spatial resampling plots
-plots.poly = createSpatialResamplingPlots(task.poly, resample = cvBinomial.poly,
-                                          crs = crs(allEnv), datum = crs(allEnv),
-                                          color.test = "red", point.size = 1)
-
-cowplot::plot_grid(plotlist = plots.poly[["Plots"]], ncol = 3, nrow = 2,
-                   labels = plots.poly[["Labels"]])
-
-############## Spatial cross validation of updated model
-sp_cvBinomial.poly = resample(learner = lrnBinomial, task = task.poly,
-                              resampling = perf_level_spCV,
-                              measures = mlr::auc,
-                              show.info = FALSE)
-
-print(sp_cvBinomial.poly)
-
-# Spatial resampling plots
-plotsSP.poly = createSpatialResamplingPlots(task.poly, resample = sp_cvBinomial.poly,
-                                            crs = crs(allEnv), datum = crs(allEnv),
-                                            color.test = "red", point.size = 1)
-
-cowplot::plot_grid(plotlist = plotsSP.poly[["Plots"]], ncol = 3, nrow = 2,
-                   labels = plotsSP.poly[["Labels"]])
-
-# Compare AUC of simple vs polynomial model
-cat("Simple Glm model - conventional CV AUC:", cvBinomial$aggr, "\n")
-cat("Simple Glm model - spatial CV AUC:", sp_cvBinomial$aggr, "\n")
-cat("Poly Glm model - conventional CV AUC:", cvBinomial.poly$aggr, "\n")
-cat("Poly Glm model - spatial CV AUC:", sp_cvBinomial.poly$aggr, "\n")
-
-# Both models show a drop in AUC when you move from conventional to spatial cross validation.
-# Importantly,  some of the apparent predictive performance in conventional CV was inflated by spatial autocorrelation.
-# The marginal improvement from adding the polynomial elevation term disappears under spatial cross validation. 
-# The improvement seen in conventional CV was likely a minor overfitting artefact.
-# Given that the polynomial model offers no real spatial predictive improvement and adds complexity, 
-# you could make a reasonable argument for preferring the simpler linear model on the basis of parsimony. 
+# Calculate the mean AUC values 
+mean(aucGLMpoly)
 
 
 #########################################################################
-########## Further Basic Evaluation of GLM model 
+########## Point Process Data Preperation
 ##########################################################################
 
-install.packages("pROC") 
-library(pROC) 
-
-# Re-specify simple glm model
-glm.meles = glm(Pres~broadleaf+urban+elev,binomial(link='logit'), data=all.cov)
-
-# Creating object for ROC evaluation 
-roc.meles <- roc(all.cov$Pres, fitted(glm.meles))
-
-# Results
-plot(roc.meles, col = "red")
-auc(roc.meles)
-
-# Find the threshold that maximises sensitivity + specificity
-opt.threshold <- coords(roc.meles, "best", best.method = "closest.topleft")
-print(opt.threshold)
-
-# Calculate TTS value
-TSS <- 0.8111753 + 0.6765 - 1
-print(TSS)
-
-# Model in oderate range (0.4–0.6). Model is better at detecting true presences 
-# than correctly rejecting absences, better to slightly-overpredict than
-# miss habitat, common for SDMs. 
-
-############# Confusion matrix metrics
-#install.packages("caret")
-#library(caret)
-# Use that threshold instead of 0.5 to classify predictions
-#cpredicted.class <- ifelse(fitted(glm.meles) >= opt.threshold$threshold, 1, 0)
-# Now run the confusion matrix with the optimal threshold
-# confusionMatrix(as.factor(predicted.class), as.factor(all.cov$Pres), positive = "1")
-
-#########################################################################
-########## Point Process Modelling
-##########################################################################
 # In the Spatstat package, predictor variables take the form of Im (image) objects. 
 # converted from rasters. 
 
+# Load 
+library(spatstat) 
+
 #Function to convert raster to images for spatstat. Takes one argument "im" that should be a raster object
 raster.as.im = function(im) {
-  #get the resolution (cell size of the raster)
-  r = raster::res(im)[1]
-  #get the origin (bottom left corner of the raster/image)
-  orig = ext(im)[c(1,3)]
-  #set the coordinates of the columns which is just a series of number from zero increasing by 100 metres (the resolution of the raster) for every cell along the rows and columns.
-  xx = orig[1] + seq(from=0,to=(ncol(im) - 1)*100,by=r)
-  #set the coordinates of the columns
-  yy = orig[2] + seq(from=0,to=(nrow(im) - 1)*100,by=r)
-  
-  #now build a single matrix with the cell values and dimension we want - note that we reverse the rows in the matrix by setting nrow(im):1. This is just because spatstat reads images in reverse order to how raster object are usually organised (so the below code ensures our image is not upside-down when we come to analyse it)
+  r = raster::res(im)[1] #get the resolution (cell size of the raster)
+  orig = ext(im)[c(1,3)]  #get the origin (bottom left corner of the raster/image)
+  xx = orig[1] + seq(from=0,to=(ncol(im) - 1)*100,by=r) #set the coordinates of the columns which is just a series of number from zero increasing by 100 metres (the resolution of the raster) for every cell along the rows and columns.
+  yy = orig[2] + seq(from=0,to=(nrow(im) - 1)*100,by=r) #set the coordinates of the columns
   mat=matrix(raster::values(im), ncol = ncol(im), 
-             nrow = nrow(im), byrow = TRUE)[nrow(im):1, ]
+             nrow = nrow(im), byrow = TRUE)[nrow(im):1, ] #now build a single matrix with the cell values and dimension we want - note that we reverse the rows in the matrix by setting nrow(im):1. This is just because spatstat reads images in reverse order to how raster object are usually organised (so the below code ensures our image is not upside-down when we come to analyse it)
   return(spatstat.geom::im(mat, 
                            xcol = xx, yrow = yy))
 }
-
-# Load spatstat
-library(spatstat) #stat analysis of spatial point patterns and converting between raster and pixel image objects
 
 # Convert broadleaf object
 broadleafIm<-raster.as.im(raster(allEnv$broadleaf))
@@ -596,6 +516,7 @@ urbanIm<-raster.as.im(raster(allEnv$urban))
 # Convert elevation object
 elevIm<-raster.as.im(raster(allEnv$elev))
 
+# Inspect
 names(allEnv)
 print(allEnv)
 
@@ -611,7 +532,7 @@ melesCoords <- st_coordinates(melesFin)
 # Create point pattern object 
 pppMeles <- ppp(melesCoords[,1], melesCoords[,2], window = window.poly)
 
-# Inspect
+# Inspect object 
 plot(allEnv$broadleaf)
 plot(pppMeles, add=T)
 
@@ -628,17 +549,18 @@ urbanIm <- rescale(urbanIm, 1000)
 
 
 #########################################################################
-########## Ripley's K Test for pppMeles
+########## Exploratory Spatial Analysis 
 ##########################################################################
-# This tests, for multiple radii, whether points within a certain radius are 
-# more clustered (high values of K) or more uniform (low values of K) than would 
-# be expected under complete spatial randomness.
 
+########## Ripley's K Test to check for clustering 
 # Test using the envelope() function
 Kcsr <- envelope(pppMeles, Kest, nsim=39, VARIANCE=T, nSD=2, global=TRUE)
 
 # Inspect
 plot(Kcsr, shade=c("hi","lo"), legend=T)
+
+############ Quadrature Loop for determining how many dummy points are needed 
+# for stable likelihood approximation? See where AIC change slows. 
 
 # Find optimal quadrature scheme resolution
 ndTry <- seq(100, 1000, by=100)
@@ -653,32 +575,39 @@ for(i in ndTry){
 # Set quadrature scheme at optimal nd value identified above
 Q <- quadscheme(pppMeles, method="grid", nd=900)
 
-# Plot increasing values for each environmental covariate against intensity (~density) of the point pattern
+########## Rohohat Plots for looking at the raw relationship between Badger 
+# intensity and each covariate to determine polynomial degree of ppm. 
+
+# Plot 
 plot(rhohat(pppMeles, broadleafIm))  
 plot(rhohat(pppMeles, elevIm))       
 plot(rhohat(pppMeles, urbanIm))      
 
 
 #########################################################################
-########## Point Process Model Cont. 
+########## Point Process Modelling 
 ##########################################################################
-# Based on polynomial terms for the three covariates and the projected coordinates
+
+# First PPModel: standard inhomogeneous Poisson process model, assumes spatial independence
+# Construct simple model with polynomial terms assessed in rohohat plots
 firstPPMod <- ppm(Q ~ poly(broadleafIm, 3) + poly(elevIm, 3) + poly(urbanIm, 2) + x + y)
 
-# Test whether model conforms to spatial randomness using the envelope() function
+# Ripley's K Test 
 firstModEnv <- envelope(firstPPMod, Kest, nsim=39, VARIANCE=TRUE, nSD=2, global=TRUE)
 plot(firstModEnv)
 
-# Accounting for clustering by using a Matern process, apply Thomas cluster process 
+# Modified PPModel: Thomas Cluster Model
+# Accounting for clustering by using a Matern process
 thomasMod <- kppm(Q ~ poly(broadleafIm, 3) + poly(elevIm, 3) + poly(urbanIm, 2) + x + y, "Thomas")
 
-# Create envelope based on simulations of inhomogeneous (clustering) point patterns
-# Using Kinhom rather than Kest to account for inhomogeneity
+# Ripley's K Test applying kinhom rather than Kest to account for inhomogeneity
 thomasEnv <- envelope(thomasMod, Kinhom, nsim=39, VARIANCE=TRUE, nSD=2, global=TRUE)
 plot(thomasEnv)
 
-# Create mapped output for meles predictions
+# Predict
 prPPMod <- predict(thomasMod)
+
+# Plot
 plot(prPPMod)
 
 # Convert plot to Raster
@@ -686,46 +615,32 @@ plot(rast(prPPMod))
 
 
 #########################################################################
-########## Evaluating the PPM with Thomas CLustering 
+########## Evaluating the modified PPM  
 ##########################################################################
 
 # here AUC = probability that a randomly-selected data point has higher predicted 
 # intensity than a randomly-selected spatial location (now spatially integrated). 
-# for ppm's this differs slightly from binomial models (models with 2 outcomes) 
-# in that here it is the intensity rather than the success of correctly 
-# classifying a binary outcome that is being tested. 
+# For ppm's this differs slightly from binomial models in that here it is the 
+# intensity rather than the success of correctly 
+# classifying (probability) a binary outcome that is being tested. 
 
-# Detach pROC temporarily to avoid masking spatstat's roc function
-detach("package:pROC", unload=TRUE)
+library(spatstat)
 
-# Now spatstat's roc will be used correctly
-thomasROC <- roc(thomasMod)
-plot(thomasROC)
+# Evaluate 
+plot(roc(thomasMod))
 
-# AUC
+# Print AUC
 auc.kppm(thomasMod)
 
-# AIC Comparison: Poisson vs Thomas Cluster Model
-# ????
-  
-  
-  
+
 #########################################################################
-########## Comparing The Glm and PPM with Thomas Clustering Predictive Plots
+########## Comparing The GlM and PPM with Thomas Clustering Predictive Plots
 ##########################################################################
 
 # Final Plots 
 par(mfrow=c(1,2))
-plot(prGLM, main="GLM prediction")
+plot(prGLMpoly, main="Polynomial GLM prediction")
 plot(rast(prPPMod), main="Thomas PPM prediction")
 
-# Normalise both to 0-1 scale for fair visual comparison
-glm_norm <- (prGLM - minmax(prGLM)[1]) / (minmax(prGLM)[2] - minmax(prGLM)[1])
 
-ppm_rast <- rast(prPPMod)
-ppm_norm <- (ppm_rast - minmax(ppm_rast)[1]) / (minmax(ppm_rast)[2] - minmax(ppm_rast)[1])
 
-# Plot side by side on same scale
-par(mfrow=c(1,2))
-plot(glm_norm, main="GLM prediction (normalised)", range=c(0,1))
-plot(ppm_norm, main="Thomas PPM prediction (normalised)", range=c(0,1))
