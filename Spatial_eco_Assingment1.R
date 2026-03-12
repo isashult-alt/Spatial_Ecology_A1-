@@ -10,7 +10,7 @@ library(dismo) #species distribution modelling package
 library (cowplot) #plot theme for ggplot package
 library (ggplot2) #data visualization package
 library (glmnet) #fits lasso and regression modelling 
-library (spatstat) 
+library (spatstat) #versatile analysis 
 
 
 ##############################################################################
@@ -588,7 +588,7 @@ plot(rhohat(pppMeles, urbanIm))
 ########## Point Process Modelling 
 ##########################################################################
 
-# First PPModel: standard inhomogeneous Poisson process model, assumes spatial independence
+########## First PP Model: standard inhomogeneous Poisson process model, assumes spatial independence
 # Construct simple model with polynomial terms assessed in rohohat plots
 firstPPMod <- ppm(Q ~ poly(broadleafIm, 3) + poly(elevIm, 3) + poly(urbanIm, 2) + x + y)
 
@@ -596,7 +596,7 @@ firstPPMod <- ppm(Q ~ poly(broadleafIm, 3) + poly(elevIm, 3) + poly(urbanIm, 2) 
 firstModEnv <- envelope(firstPPMod, Kest, nsim=39, VARIANCE=TRUE, nSD=2, global=TRUE)
 plot(firstModEnv)
 
-# Modified PPModel: Thomas Cluster Model
+########## Modified PP Model: Thomas Cluster Model
 # Accounting for clustering by using a Matern process
 thomasMod <- kppm(Q ~ poly(broadleafIm, 3) + poly(elevIm, 3) + poly(urbanIm, 2) + x + y, "Thomas")
 
@@ -626,6 +626,7 @@ plot(rast(prPPMod))
 
 library(spatstat)
 
+dev.off()
 # Evaluate 
 plot(roc(thomasMod))
 
