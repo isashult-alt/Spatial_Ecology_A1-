@@ -1,11 +1,10 @@
 setwd("~/Desktop/GEOG71922/isashult-alt")
 
 #Install packages & Load Libraries
-install.packages(c("terra","sf","mapview","dismo","spatstat","cowplot","ggplot2","glmnet"))
+install.packages(c("terra","sf","dismo","spatstat","cowplot","ggplot2","glmnet"))
 
 library(terra) #for spatial data
 library(sf) #data frames with geometry
-library (mapview) #overlays an interactive arcgis map 
 library(dismo) #species distribution modelling package 
 library (cowplot) #plot theme for ggplot package
 library (ggplot2) #data visualization package
@@ -20,19 +19,9 @@ library (spatstat) #versatile analysis
 # Loading my file into R studio
 meles <- read.csv("melesmeles.csv")
 
-# Explore Data set
-head(meles)
-str(meles)
-dim(meles)
-names(meles)
-
-# Subset the data to only include points with complete coordinates
+# Subsetting occurence records of badgers 
 meles <- meles[!is.na(meles$Latitude),]
-
-# Subset the data to only include confirmed occurrences
 meles <- meles[!is.na(meles$Identification.verification.status),]
-
-# Remove all points with uncertainty > 1000m
 meles <- meles[meles$Coordinate.uncertainty_m<=1000,]
 
 
@@ -43,22 +32,24 @@ meles <- meles[meles$Coordinate.uncertainty_m<=1000,]
 # Create crs object
 meles.latlong = data.frame(x=meles$Longitude,y=meles$Latitude)
 
-# Use coordinates object to create our spatial points object
+# Create coordinates object 
 meles.sp = st_as_sf(meles.latlong,coords=c("x","y"),crs="epsg:4326")
 
-# Load in polygon of the study area (central Scotland) 
+
+
+# Load in polygon of the study area (Cairgnorms, central Scotland) 
 scot = st_read('scotSamp.shp')
 
-# Load in the land cover map (LCM) and clip to the polygon
+# Load in the UK land cover map (LCM) and clip to the polygon
 LCM = rast("LCMUK.tif")
 
-# Crop to the extent of the study area plus a little more 
-LCM = crop(LCM,st_buffer(scot, dist= 1000))
 
-# Aggregate LCM raster from 25 to 100m resolution
+
+# Crop LCM to the study extent and aggregate from 25 to 100 m resolution
+LCM = crop(LCM,st_buffer(scot, dist= 1000))
 LCM = aggregate(LCM$LCMUK_1,fact=4,fun="modal")
 
-# Project meles data
+# Project meles data 
 meles.sp=st_transform(meles.sp,crs(LCM))
 
 # Crop the occurence points to the study area
@@ -72,39 +63,51 @@ plot(LCM)
 plot(melesFin$geometry,add=T)
 
 
+
+# Final plot of study area
+ggplot() +
+  geom_sf(data = scot, fill = "lightgrey", colour = "darkgrey", linewidth = 0.5) +
+  geom_sf(data = melesFin, colour = "red", size = 0.8, alpha = 0.6) +
+  theme_minimal() +
+  labs(
+    x = "Easting",
+    y = "Northing"
+  ) +
+  theme(
+    panel.grid = element_line(colour = "white"),
+    plot.title = element_text(face = "bold"), 
+    axis.text = element_text(size = 6),
+    axis.title = element_text(size = 8)
+  )
+
+
 ##########################################################################
 ########## Setting up Land Cover Covariates
 ##########################################################################
 
-# Access levels of the raster by treating them as categorical data 
+# Access raster levels as categorical data 
 LCM = as.factor(LCM$LCMUK_1)
-
-# Create an vector object called reclass
 reclass = c(0,1,rep(0,20))
 
 # Combine with the LCM categories into a matrix of old and new values.
 RCmatrix = cbind(levels(LCM)[[1]],reclass)
-
 RCmatrix = RCmatrix[,2:3]
-
-# Apply function to make sure new columns are numeric 
 RCmatrix = apply(RCmatrix,2,FUN=as.numeric)
 
 # Assign new values to LCM with our reclassification matrix
 broadleaf = classify(LCM, RCmatrix)
 
-#Create an vector object called reclassUrban 
+
+
+# Create a vector object reclassUrban 
 reclassUrban = c(rep(0,19),1,1)
 
 # Combine with the LCM categories into a matrix of old and new values.
 RCmatrixUrban = cbind(levels(LCM)[[1]],reclass)
-
 RCmatrixUrban = RCmatrixUrban[,2:3]
-
-# Apply function to make sure new columns are numeric 
 RCmatrixUrban = apply(RCmatrixUrban,2,FUN=as.numeric)
 
-# Use the reclassify() function to assign new values to LCM with our reclassification matrix
+# Assign new values to LCM with our reclassification matrix
 urban = classify(LCM, RCmatrixUrban)
 
 
@@ -115,28 +118,19 @@ urban = classify(LCM, RCmatrixUrban)
 # Our buffer analysis (earlier practical) suggests a bi modal response with a 
 # strong signal at 100m radius, but an overall highest log likelihood value at 
 # 900m. Assume the latter as characteristic scale of the response of meles meles 
-# to broadleafed woodland for following section. We will  create a variable to 
-# reflect this by generating a raster layer for which the value at each cell 
-# gives the proportion of broadleaf woodland within a 900m radius. To 
-# characterise the spatial distribution of this characteristic we build a spatial 
-# weights matrix and entering this into a focal (neighbourhood) analysis 
+# to broadleafed woodland cover. 
 
 # Get number of pixels needed to cover the 900m radius 
 nPix = round(900/res(LCM)[1])
-
-# Double this number (for the distance in two direction i.e. diameter) and 
-# add one (for an odd numbered grid with central cell)
 nPix = (nPix*2)+1
 
 # Build weights matrix
 weightsMatrix = matrix(1:nPix^2,nrow=nPix,ncol=nPix)
 
-# Get focal cell 
 x = ceiling(ncol(weightsMatrix)/2)
 y = ceiling(nrow(weightsMatrix)/2)
 focalCell = weightsMatrix[x,y]
 
-# Return the index of the cell that is the focal cell in weightsMatrix
 indFocal= which(weightsMatrix==focalCell,arr.ind = TRUE)
 
 # Compute distances for populating matrix, window of analysis
@@ -154,24 +148,15 @@ for(i in 1:nPix^2){
 
 # Add distance values to the weights matrix
 weightsMatrix[] = unlist(distances)
-
-# Set cells outside search radius to NA
 weightsMatrix[weightsMatrix>900] = NA
 
-# Inspect
-plot(rast(weightsMatrix)) 
-
-# Normalize the weights matrix cells so distances sum to 1
+# Normalize the weights matrix cells 
 weightsMatrixNorm = weightsMatrix
 weightsMatrixNorm[!is.na(weightsMatrixNorm)]=1/length(weightsMatrixNorm[!is.na(weightsMatrixNorm)])
 
 sum(weightsMatrixNorm,na.rm=T)
 
-# Inspect
-plot(rast(weightsMatrixNorm))
-
-# # Sum neighborhood values from all surrounding cells 
-# to apply our spatial weights matrix to the woodland layer
+# Apply the spatial weights matrix to the woodland layer
 lcm_wood_900 = focal(broadleaf,w=weightsMatrixNorm,fun="sum")
 
 plot(lcm_wood_900)
@@ -184,24 +169,20 @@ plot(lcm_wood_900)
 # A seperate buffer analysis suggests a bi modal response with a 
 # strong signal at 100m radius, but an overall highest log likelihood value at 
 # 1500m. Assume the latter as characteristic scale of the response of meles meles 
-# to urban land.
+# to urban land cover. 
 
 # Get number of pixels needed to cover the 1500m radius for the urban class 
 nPixUrban = round(1500/res(LCM)[1])
-
-# Next, double and add one
 nPixUrban = (nPixUrban*2)+1
 
 # Build weights matrix
 weightsMatrixUrban = matrix(1:nPixUrban^2,nrow=nPixUrban,ncol=nPixUrban)
 
-# Get focal cell 
 x=ceiling(ncol(weightsMatrixUrban)/2)
 y=ceiling(nrow(weightsMatrixUrban)/2)
 
 focalCell = weightsMatrixUrban[x,y]
 
-# Return the index of the focal cell in Urban_weightsMatrix.
 indFocal= which(weightsMatrixUrban==focalCell,arr.ind = TRUE)
 
 # Compute distances
@@ -219,14 +200,12 @@ for(i in 1:nPixUrban^2){
 
 # Add distance values to the weights matrix
 weightsMatrixUrban[] = unlist(distancesUrban)
-
-# Set cells outside search radius to NA
 weightsMatrixUrban[weightsMatrixUrban>1500] = NA
 
 # Normalise the weights matrix 
 weightsMatrixUrban[!is.na(weightsMatrixUrban)] = 1/length(weightsMatrixUrban[!is.na(weightsMatrixUrban)])
 
-# Sum urban class from all surrounding cells
+# Apply the spatial weights matrix to the urban layer
 lcm_urban_1500 = focal(urban,w=weightsMatrixUrban,fun="sum")
 
 plot(lcm_urban_1500)
@@ -255,59 +234,50 @@ plot(demScot)
 allEnv = c(lcm_wood_900,lcm_urban_1500,demScot)
 names(allEnv) = c("broadleaf","urban","elev")
 
-# Check 
+# Insepct 
 names(allEnv)
 plot(allEnv)
 
-# Create background points
+# Creating psuedo-absence points
 set.seed(11)
 
-# Sample background - one point for every cell (9775)
 back = spatSample(allEnv,size=2000,as.points=TRUE,method="random",na.rm=TRUE) 
 back = back[!is.na(back$broadleaf),]
 back = st_as_sf(back,crs="EPSG:27700")
 
-# Get environmental covariates at presence locations
+
+
+# Locate environmental covariates at presence locations
 eP = terra::extract(allEnv,melesFin)
 
-# Bind together the presence data 
+# Collating the presence data 
 Pres.cov = st_as_sf(cbind(eP,melesFin))
 Pres.cov$Pres=1
-
-# Remove the first ID field coloumn
 Pres.cov = Pres.cov[,-1]
 
-# Get coordinates for spatial cross-validation later
 coordsPres = st_coordinates(Pres.cov)
 
-# Create plain data frame version of Pres.cov for modelling
+# Create plain data frame version of Pres.cov for GLM Validation
 Pres.cov.df = as.data.frame(Pres.cov)[, c("broadleaf", "urban", "elev", "Pres")]
 
-# Drop geometry column 
+# Collating the background data
 Back.cov = st_as_sf(data.frame(back,Pres=0))
 
-# Get coordinates of background points for cross validation later
 coordsBack = st_coordinates(back)
 
-# Create plain data frame version of Back.cov for modelling
+# Create plain data frame version of Back.cov for GLM Validation
 Back.cov.df = as.data.frame(Back.cov)[, c("broadleaf", "urban", "elev", "Pres")]
 
-# Combine into a table
-coords = data.frame(rbind(coordsPres,coordsBack))
 
-# Assign coloumn names of DF
+
+# Collate coordinates of data inputs
+coords = data.frame(rbind(coordsPres,coordsBack))
 colnames(coords) = c("x","y")
 
-# Stacks pres and absence data into a df
+# Collate spatial presencne-absence data  
 all.cov = rbind(Pres.cov, Back.cov)
-
-# Add in coordinates for later spatial cross validation 
 all.cov = cbind(all.cov,coords)
-
-# Remove any rows with NA
 all.cov = na.omit(all.cov)
-
-# Drop the geomery coloum 
 all.cov = st_drop_geometry(all.cov)
 
 
@@ -315,7 +285,7 @@ all.cov = st_drop_geometry(all.cov)
 ########## GLM Model Construction
 ##########################################################################
 
-# Specify model with all variables
+# Specify simple model with all variables
 glm.meles <- glm(Pres~broadleaf+urban+elev,binomial(link='logit'), data=all.cov)
 
 # Predict 
@@ -327,11 +297,12 @@ plot(prGLM, main='GLM, regression')
 # Inspect
 summary(glm.meles)
 
-#########################################################################
-########## GLM Model Evaluation
-##########################################################################
 
+#########################################################################
+########## GLM Model Validation and Evaluation
+##########################################################################
 # Split sample & K fold assessment of AUC metric across 5 models 
+
 folds = 5
 
 # Partition presence and absence data according to folds
@@ -362,12 +333,12 @@ for(i in 1:folds){
 # Model evaluation results 
 aucGLM <- sapply( eGLM, function(x){slot(x, 'auc')} )
 
-# Calculate the mean AUC values 
+# Calculate the mean AUC value 
 mean(aucGLM)
 
 
 #########################################################################
-########## Expand on Variable Relationships in GLM 
+########## Expand on Variable Relationships in GLM with Response Plots 
 ##########################################################################
 
 ############ BROADLEAF response 
@@ -376,8 +347,7 @@ glmNewBroadleaf= data.frame(broadleaf=seq(0,max(all.cov$broadleaf),length=1000),
                   elev=mean(all.cov$elev),
                   urban=mean(all.cov$urban))
 
-
-# Probability-scale predictions using type = "response" 
+# Probability-scale predictions 
 preds = predict(glm.meles, newdata = glmNewBroadleaf, type = "response", se.fit = TRUE)
 glmNewBroadleaf$fit = preds$fit
 glmNewBroadleaf$se = preds$se.fit
@@ -398,7 +368,7 @@ glmNewUrban=data.frame(urban=seq(0,max(all.cov$urban),length=1000),
                        elev=mean(all.cov$elev),
                        broadleaf=mean(all.cov$broadleaf))
 
-# Use type = "response" for probability-scale predictions    
+# Probability-scale predictions    
 predUrban = predict(glm.meles, newdata = glmNewUrban, type = "response", se.fit = TRUE)
 glmNewUrban$fit = predUrban$fit
 glmNewUrban$se = predUrban$se.fit
@@ -418,7 +388,7 @@ glmNewElev=data.frame(elev=seq(0,max(all.cov$elev),length=1000),
                       broadleaf=mean(all.cov$broadleaf))
 
 
-# Use type = "response" for probability-scale predictions    
+# Probability-scale predictions    
 predElev = predict(glm.meles, newdata = glmNewElev, type = "response", se.fit = TRUE)
 glmNewElev$fit = predElev$fit
 glmNewElev$se = predElev$se.fit
@@ -435,24 +405,24 @@ ggplot(glmNewElev, aes(x = elev, y = fit)) +
 ########## Polynomial GLM Construction 
 ##########################################################################
 
-# Glm model using the appropriate polynomial term for broadleaf
+# Refit GLM model using the appropriate polynomial term for broadleaf
 glm.meles.poly = glm(Pres ~ broadleaf + urban + poly(elev, 2), binomial(link = 'logit'), data = all.cov)
 
 # Predict 
 prGLMpoly = predict(allEnv,glm.meles,type="response")
 
 # Plot
-plot(prGLMpoly, main='GLM, polynomial')
+plot(prGLMpoly, main='Polynomial GLM Predictions')
 
 # Inspect
 summary(glm.meles.poly)
 
 
 #########################################################################
-########## Polynomial GLM Model Evaluation
+########## Polynomial GLM Validation and Evaluation
 ##########################################################################
-
 # Split sample & K fold assessment of AUC metric across 5 models 
+
 folds = 5
 
 # Partition presence and absence data according to folds
@@ -465,39 +435,37 @@ par(mfrow=c(2,3))
 
 # Loop to iterate over folds
 for(i in 1:folds){
-  train <- Pres.cov.df[kfold_pres != i,] #for presence values, select all folds which are not 'i' to train the model
-  test <- Pres.cov.df[kfold_pres == i,] #the remaining fold is used to test the model
-  backTrain <- Back.cov.df[kfold_back != i,] #now for background values, select training folds
-  backTest <- Back.cov.df[kfold_back == i,] #use the remainder for model testing
-  dataTrain <- as.data.frame(rbind(train, backTrain)) #bind presence and background training data together
-  dataTest <- as.data.frame(rbind(test, backTest)) #bind test data together
+  train <- Pres.cov.df[kfold_pres != i,] 
+  test <- Pres.cov.df[kfold_pres == i,] 
+  backTrain <- Back.cov.df[kfold_back != i,] 
+  backTest <- Back.cov.df[kfold_back == i,]
+  dataTrain <- as.data.frame(rbind(train, backTrain)) 
+  dataTest <- as.data.frame(rbind(test, backTest)) 
   glm_eval <- glm(Pres ~ broadleaf + urban + poly(elev, 2),
                   binomial(link="logit"),
-                  data = dataTrain)   # Train GLM 
+                  data = dataTrain)   
   eGLMpoly[[i]] <- evaluate(p = dataTest[which(dataTest$Pres==1),],
                         a = dataTest[which(dataTest$Pres==0),],
-                        glm_eval)   # Evaluate on held-out fold
+                        glm_eval)   
   plot(eGLMpoly[[i]], "ROC")
 }
 
-# Model evaluation results 
+# Polynomial GLM evaluation results 
 aucGLMpoly <- sapply( eGLMpoly, function(x){slot(x, 'auc')} )
 
-# Calculate the mean AUC values 
+# Calculate the mean AUC value
 mean(aucGLMpoly)
 
 
 #########################################################################
-########## Point Process Data Preperation
+########## Point Process Data Preparation
 ##########################################################################
+# In the Spatstat package, predictor variables take the form of Im (image)
+# objects, converted from rasters. 
 
-# In the Spatstat package, predictor variables take the form of Im (image) objects. 
-# converted from rasters. 
-
-# Load 
 library(spatstat) 
 
-#Function to convert raster to images for spatstat. Takes one argument "im" that should be a raster object
+#Function to convert raster to images for spatstat. 
 raster.as.im = function(im) {
   r = raster::res(im)[1] #get the resolution (cell size of the raster)
   orig = ext(im)[c(1,3)]  #get the origin (bottom left corner of the raster/image)
@@ -509,37 +477,22 @@ raster.as.im = function(im) {
                            xcol = xx, yrow = yy))
 }
 
-# Convert broadleaf object
+# Convert response variables
 broadleafIm<-raster.as.im(raster(allEnv$broadleaf))
-# Convert urban object
 urbanIm<-raster.as.im(raster(allEnv$urban))
-# Convert elevation object
 elevIm<-raster.as.im(raster(allEnv$elev))
-
-# Inspect
-names(allEnv)
-print(allEnv)
 
 # Create study window using the urbanIm image object as a template
 window.poly <- as.owin(urbanIm)
 
-# Inspect
-plot(window.poly)
+
 
 # Get coordinates from melesFin object for creating point pattern
 melesCoords <- st_coordinates(melesFin)
 
 # Create point pattern object 
 pppMeles <- ppp(melesCoords[,1], melesCoords[,2], window = window.poly)
-
-# Inspect object 
-plot(allEnv$broadleaf)
-plot(pppMeles, add=T)
-
-# Use as.ppp() to remove points outside the window
 pppMeles <- as.ppp(pppMeles)
-
-# Re-scale from m to km
 pppMeles <- rescale(pppMeles, 1000)
 
 # Re-scale image objects to conform with the point pattern
@@ -552,17 +505,16 @@ urbanIm <- rescale(urbanIm, 1000)
 ########## Exploratory Spatial Analysis 
 ##########################################################################
 
-########## Ripley's K Test to check for clustering 
-# Test using the envelope() function
+########## Ripley's K Envelope Test to check for clustering 
 Kcsr <- envelope(pppMeles, Kest, nsim=39, VARIANCE=T, nSD=2, global=TRUE)
 
 # Inspect
 plot(Kcsr, shade=c("hi","lo"), legend=T)
 
-############ Quadrature Loop for determining how many dummy points are needed 
-# for stable likelihood approximation? See where AIC change slows. 
 
-# Find optimal quadrature scheme resolution
+############ Quadrature Loop for determining how many background points are needed 
+# for stable likelihood approximation. See where AIC metric stabilises.  
+
 ndTry <- seq(100, 1000, by=100)
 
 for(i in ndTry){
@@ -572,11 +524,12 @@ for(i in ndTry){
   print(AIC(fit.i))
 }
 
-# Set quadrature scheme at optimal nd value identified above
+# Set quadrature scheme at optimal nd value identified above: 900
 Q <- quadscheme(pppMeles, method="grid", nd=900)
 
-########## Rohohat Plots for looking at the raw relationship between Badger 
-# intensity and each covariate to determine polynomial degree of ppm. 
+
+########## Rhohat Response Plots for looking at raw relationship between badger 
+# intensity and each covariate to determine polynomial degree of PPM 
 
 # Plot 
 plot(rhohat(pppMeles, broadleafIm))  
@@ -588,60 +541,41 @@ plot(rhohat(pppMeles, urbanIm))
 ########## Point Process Modelling 
 ##########################################################################
 
-########## First PP Model: standard inhomogeneous Poisson process model, assumes spatial independence
-# Construct simple model with polynomial terms assessed in rohohat plots
-firstPPMod <- ppm(Q ~ poly(broadleafIm, 3) + poly(elevIm, 3) + poly(urbanIm, 2) + x + y)
+########## Poisson PP Model: Standard inhomogeneous Poisson Process 
+# Construct model with fitted polynomial terms 
+firstPPMod <- ppm(Q ~ poly(broadleafIm, 3) + poly(elevIm, 2) + poly(urbanIm, 2) + x + y)
 
 # Ripley's K Test 
 firstModEnv <- envelope(firstPPMod, Kest, nsim=39, VARIANCE=TRUE, nSD=2, global=TRUE)
 plot(firstModEnv)
 
-########## Modified PP Model: Thomas Cluster Model
-# Accounting for clustering by using a Matern process
-thomasMod <- kppm(Q ~ poly(broadleafIm, 3) + poly(elevIm, 3) + poly(urbanIm, 2) + x + y, "Thomas")
 
-# Ripley's K Test applying kinhom rather than Kest to account for inhomogeneity
+########## Modified PPM: Thomas-cluster Proccess
+# Refit model to account for clustering by specifying the 'thomas' argument 
+thomasMod <- kppm(Q ~ poly(broadleafIm, 3) + poly(elevIm, 2) + poly(urbanIm, 2) + x + y, "Thomas")
+
+# Ripley's K Test specifying kinhom to check model fit
 thomasEnv <- envelope(thomasMod, Kinhom, nsim=39, VARIANCE=TRUE, nSD=2, global=TRUE)
 plot(thomasEnv)
 
-# Predict
+
+# Predict with Thomas-cluster PPM
 prPPMod <- predict(thomasMod)
 
 # Plot
-plot(prPPMod)
-
-# Convert plot to Raster
-plot(rast(prPPMod)) 
+plot((prPPMod), main="Thomas-Clustering PPM Predictions")
 
 
 #########################################################################
 ########## Evaluating the modified PPM  
 ##########################################################################
 
-# here AUC = probability that a randomly-selected data point has higher predicted 
-# intensity than a randomly-selected spatial location (now spatially integrated). 
-# For ppm's this differs slightly from binomial models in that here it is the 
-# intensity rather than the success of correctly 
-# classifying (probability) a binary outcome that is being tested. 
-
 library(spatstat)
 
-dev.off()
-# Evaluate 
+# Generate ROC plot
 plot(roc(thomasMod))
 
-# Print AUC
+# Generate evaluative AUC metric for THomas-cluster PPM 
 auc.kppm(thomasMod)
-
-
-#########################################################################
-########## Comparing The GlM and PPM with Thomas Clustering Predictive Plots
-##########################################################################
-
-# Final Plots 
-par(mfrow=c(1,2))
-plot(prGLMpoly, main="Polynomial GLM prediction")
-plot(rast(prPPMod), main="Thomas PPM prediction")
-
 
 
